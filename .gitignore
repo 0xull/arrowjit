@@ -11,3 +11,8 @@ wheels/
 
 # Hypothesis example database
 .hypothesis/
+
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
