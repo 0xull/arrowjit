@@ -144,8 +144,8 @@ class _Checker:
                 result = self.return_value(self.expr(value, assigned), value)
                 return Return(result, span), assigned, True
             case ast.Assign(targets=[ast.Name(id=name)], value=value):
-                result = self.assign(name, self.expr(value, assigned), node)
-                return result, assigned | {name}, False
+                assignment = self.assign(name, self.expr(value, assigned), node)
+                return assignment, assigned | {name}, False
             case ast.AugAssign(target=ast.Name(id=name) as target, op=op, value=value):
                 current = self.variable(name, target, assigned)
                 updated = self.binary(op, current, self.expr(value, assigned), node)

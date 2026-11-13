@@ -75,17 +75,16 @@ def test_math_functions_take_and_return_float() -> None:
 
 def test_a_local_keeps_the_type_of_its_first_assignment() -> None:
     def f(x: float) -> float:
-        if x > 0.0:
-            y = x * 2.0
-        else:
+        y = x * 2.0
+        if x < 0.0:
             y = 0
         return y
 
-    first, _ = typed(f).body
-    assert isinstance(first, If)
-    (else_assign,) = first.orelse
-    assert isinstance(else_assign, Assign)
-    assert render(else_assign.value) == "float(0)"
+    _, branch, _ = typed(f).body
+    assert isinstance(branch, If)
+    (reassignment,) = branch.body
+    assert isinstance(reassignment, Assign)
+    assert render(reassignment.value) == "float(0)"
 
 
 def test_an_early_return_counts_as_returning() -> None:
