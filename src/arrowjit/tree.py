@@ -6,6 +6,7 @@ show up as explicit Cast nodes.
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import assert_never
 
 from arrowjit.diagnostics import Span
 from arrowjit.scalar import ScalarType
@@ -157,3 +158,29 @@ class Function:
     params: tuple[Param, ...]
     return_type: ScalarType
     body: tuple[Stmt, ...]
+
+
+def render(expr: Expr) -> str:
+    """Render an expression with its casts visible, for tests and debugging."""
+    match expr:
+        case Const(value=value):
+            return repr(value)
+        case Var(name=name):
+            return name
+        case Unary(operand=operand):
+            prefix = "-" if expr.op is UnaryOp.NEG else "not "
+            return f"({prefix}{render(operand)})"
+        case (
+            Binary(op=op, left=left, right=right)
+            | Compare(op=op, left=left, right=right)
+            | Logical(op=op, left=left, right=right)
+        ):
+            return f"({render(left)} {op.value} {render(right)})"
+        case Conditional(test=test, body=body, orelse=orelse):
+            return f"({render(body)} if {render(test)} else {render(orelse)})"
+        case Call(func=func, args=args):
+            return f"{func.value}({', '.join(render(arg) for arg in args)})"
+        case Cast(operand=operand, type=target):
+            return f"{target.python_name}({render(operand)})"
+        case _:
+            assert_never(expr)
