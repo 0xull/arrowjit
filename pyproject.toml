@@ -35,7 +35,7 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "RUF", "PT"]
 [tool.mypy]
 strict = true
 warn_unreachable = true
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 
 [[tool.mypy.overrides]]
 module = ["llvmlite", "llvmlite.*", "pyarrow", "pyarrow.*"]
