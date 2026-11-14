@@ -62,3 +62,12 @@ def test_finish_keeps_only_what_the_result_and_error_use() -> None:
         "  return %2",
         "  raise if %3",
     ]
+
+
+def test_double_negation_and_repeated_operands_fold_away() -> None:
+    b = Builder()
+    negative = b.emit(Op.LT, BOOL, b.param(0, FLOAT64), b.const(0.0, FLOAT64))
+
+    assert b.emit(Op.NOT, BOOL, b.emit(Op.NOT, BOOL, negative)) == negative
+    assert b.emit(Op.AND, BOOL, negative, negative) == negative
+    assert b.emit(Op.OR, BOOL, negative, negative) == negative

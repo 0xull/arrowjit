@@ -141,10 +141,14 @@ class Builder:
         return attr if isinstance(attr, bool) else None
 
     def _fold(self, op: Op, args: tuple[int, ...]) -> int | None:
-        """Fold logic on constant bools, since predicates start as True and errors as False."""
+        """Simplify boolean logic, since predicates start as True and errors as False."""
         known = [self._known(arg) for arg in args]
-        if op is Op.NOT and known[0] is not None:
-            return self.const(not known[0], BOOL)
+        if op is Op.NOT:
+            if known[0] is not None:
+                return self.const(not known[0], BOOL)
+            inner = self.instrs[args[0]]
+            if inner.op is Op.NOT:
+                return inner.args[0]
         if op in (Op.AND, Op.OR):
             # True is the identity of and, and absorbs or. False is the other way around.
             identity = op is Op.AND
@@ -153,6 +157,8 @@ class Builder:
                 return right if known[0] is identity else left
             if known[1] is not None:
                 return left if known[1] is identity else right
+            if left == right:
+                return left
         if op is Op.SELECT:
             _, if_true, if_false = args
             if known[0] is not None:
