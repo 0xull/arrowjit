@@ -123,7 +123,7 @@ def bad_missing_return(x: float) -> float:  # type: ignore[return]
 def bad_maybe_unassigned(x: float) -> float:
     if x > 0.0:
         y = x
-    return y
+    return y  # pyright: ignore[reportPossiblyUnboundVariable]
 
 
 def bad_global(x: float) -> float:
