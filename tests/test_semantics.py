@@ -5,6 +5,7 @@ from collections.abc import Callable
 from functools import cache
 from typing import Any
 
+import pyarrow as pa
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -14,6 +15,7 @@ from arrowjit.checker import check
 from arrowjit.frontend import parse_function
 from arrowjit.interpret import interpret, wrap
 from arrowjit.ir import Constant
+from arrowjit.kernel import Kernel
 from arrowjit.lower import lower
 from arrowjit.scalar import ScalarType
 
@@ -23,6 +25,7 @@ ANY_INTS = st.integers(-(2**63), 2**63 - 1)
 EXACT_INTS = st.integers(-(2**53), 2**53)
 # Every float64, including nan, inf, -0.0 and subnormals.
 ANY_FLOATS = st.floats()
+ARROW_TYPES = {ScalarType.INT64: pa.int64(), ScalarType.FLOAT64: pa.float64()}
 
 
 def mixed(a: int, x: float) -> float:
@@ -74,6 +77,19 @@ def wrapping(a: int, b: int) -> int:
     return abs(a) * b - 3 * a + -b
 
 
+def comparisons(x: float, y: float) -> int:
+    score = 0
+    if x != y:
+        score += 1
+    if x <= y:
+        score += 2
+    if x >= y:
+        score += 4
+    if x == y:
+        score += 8
+    return score
+
+
 type Case = tuple[Callable[..., Any], tuple[st.SearchStrategy[Any], ...]]
 
 CASES: list[Case] = [
@@ -87,6 +103,7 @@ CASES: list[Case] = [
     (ratio, (EXACT_INTS, EXACT_INTS)),
     (float_division, (ANY_FLOATS, ANY_FLOATS)),
     (wrapping, (ANY_INTS, ANY_INTS)),
+    (comparisons, (ANY_FLOATS, ANY_FLOATS)),
 ]
 
 
@@ -131,3 +148,66 @@ def test_wrap_reduces_to_int64_like_twos_complement() -> None:
     assert wrap(2**63) == -(2**63)
     assert wrap(-(2**63) - 1) == 2**63 - 1
     assert wrap(2**64 + 5) == 5
+
+
+@cache
+def compiled(fn: Callable[..., Any]) -> Kernel:
+    return Kernel(lowered(fn))
+
+
+def run_kernel(
+    kernel: Kernel, rows: list[tuple[Any, ...]], valid: list[bool] | None
+) -> tuple[list[Any], int]:
+    """Run a kernel over rows given as Python values, returning its output and first error."""
+    n = len(rows)
+    columns = [
+        pa.array([row[position] for row in rows], type=ARROW_TYPES[param])
+        for position, param in enumerate(kernel.function.params)
+    ]
+    out = pa.allocate_buffer(n * 8)
+    # The kernel reads the bitmap a 64-bit word at a time, so pad it to whole words.
+    bitmap = None if valid is None else pa.array(valid + [False] * (-n % 64), type=pa.bool_())
+    first = kernel(
+        out.address,
+        None if bitmap is None else bitmap.buffers()[1].address,
+        n,
+        [column.buffers()[1].address for column in columns],
+    )
+    values = pa.Array.from_buffers(ARROW_TYPES[kernel.function.return_type], n, [None, out])
+    return values.to_pylist(), first
+
+
+@pytest.mark.parametrize(("fn", "columns"), CASES, ids=[fn.__name__ for fn, _ in CASES])
+@given(data=st.data())
+def test_compiled_kernel_matches_python_on_whole_columns(
+    fn: Callable[..., Any], columns: tuple[st.SearchStrategy[Any], ...], data: st.DataObject
+) -> None:
+    kernel = compiled(fn)
+    n = data.draw(st.integers(0, 150), label="n")
+    rows = data.draw(st.lists(st.tuples(*columns), min_size=n, max_size=n), label="rows")
+    valid = data.draw(st.none() | st.lists(st.booleans(), min_size=n, max_size=n), label="valid")
+    values, first = run_kernel(kernel, rows, valid)
+
+    expected = [python_outcome(fn, row, kernel.function.return_type) for row in rows]
+    checked = [i for i in range(n) if valid is None or valid[i]]
+    raising = [i for i in checked if expected[i] is None]
+    assert first == (raising[0] if raising else -1)
+    # The kernel returns as soon as a block has an error, so later rows aren't written.
+    stop = n if first < 0 else first
+    for i in checked:
+        if i < stop:
+            assert same(values[i], expected[i]), f"row {i} is {rows[i]}"
+
+
+def test_int64_min_floor_divided_by_minus_one_wraps_instead_of_trapping() -> None:
+    assert run_kernel(compiled(guarded), [(-(2**63), -1)], None) == ([-(2**63)], -1)
+
+
+def test_each_block_reads_its_own_validity_word() -> None:
+    # Rows 100 and 130 divide by zero, and rows 2 and 100 are null. Lanes repeat every
+    # 64 rows, so a kernel that read another block's validity word would stop at row 100
+    # or skip row 130.
+    rows = [(1, 0) if i in (100, 130) else (1, 1) for i in range(150)]
+    valid = [i not in (2, 100) for i in range(150)]
+    _, first = run_kernel(compiled(ratio), rows, valid)
+    assert first == 130
